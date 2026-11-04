@@ -1,0 +1,54 @@
+import "mbuild/api";
+
+// telemetry: named events, handlers and spans (Elixir :telemetry style).
+// Pure Mettle, no dependencies. Linux x86-64 (asm atomics, raw clock).
+fn project() {
+  mb_package("telemetry", "0.1.0");
+  mb_meta("description", "named events with measurements and metadata, attachable handlers, spans; lock-free execute");
+  mb_meta("license", "Apache-2.0");
+  mb_import_root("src");
+}
+
+// test-programs: build the test package (tests/) with mbuild in debug and
+// release, then run every suite. Each suite prints one "OK <suite>" line.
+// b_execute is a benchmark: it gets --assert in release only, where it
+// fails if tm_execute costs 5 ns per call or more.
+//   mbuild test-programs              both profiles
+//   mbuild test-programs --debug      debug only
+//   mbuild test-programs --release    release only
+fn cmd_test_programs(a: MbArgs*) -> int32 {
+  var mbuild: string = mb_env("MBUILD_EXE");
+  if (mbuild == "") { mbuild = "mbuild"; }
+  var suites: string[4] = ["t_core", "t_span", "t_stress", "b_execute"];
+  var profiles: string[2] = ["debug", "release"];
+  var failed: int32 = 0;
+  for pi in 0..2 {
+    var prof: string = profiles[pi];
+    if (prof == "debug" && mb_flag(a, "--release")) { continue; }
+    if (prof == "release" && mb_flag(a, "--debug")) { continue; }
+    mb_say("== " + prof);
+    var b: MbCmd* = mb_cmd(mbuild);
+    mb_cmd_arg(b, "build");
+    if (prof == "release") { mb_cmd_arg(b, "-r"); }
+    mb_cmd_cwd(b, mb_root() + "/tests");
+    if (mb_cmd_run(b) != 0) {
+      mb_warn("tests does not build (" + prof + ")");
+      failed = failed + 1;
+      continue;
+    }
+    for i in 0..4 {
+      var r: MbCmd* = mb_cmd(mb_root() + "/tests/build/linux/" + prof + "/" + suites[i]);
+      if (suites[i] == "b_execute" && prof == "release") { mb_cmd_arg(r, "--assert"); }
+      if (mb_cmd_run(r) != 0) {
+        mb_warn(suites[i] + " failed (" + prof + ")");
+        failed = failed + 1;
+      }
+    }
+  }
+  if (failed > 0) {
+    mb_say("test-programs: FAILED ({failed})");
+    return 1;
+  }
+  mb_say("test-programs: ok");
+  return 0;
+}

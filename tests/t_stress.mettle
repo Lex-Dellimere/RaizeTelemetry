@@ -1,0 +1,83 @@
+// Stress: 8 threads call tm_execute 1,000,000 times each while a 9th thread
+// attaches and detaches a second handler in a loop (SPEC section 7, item 8).
+// Handler A is attached throughout and counts atomically: the count must be
+// exactly 8,000,000.
+
+import "std/io";
+import "std/thread";
+import "telemetry/telemetry";
+import "tcheck";
+
+const WORKERS = 8;
+const CALLS = 1000000;
+
+var g_cnt_a: int32 = 0;
+var g_cnt_b: int32 = 0;
+var g_workers_done: int32 = 0;
+var g_event: int32 = -1;
+var g_attach_errs: int32 = 0;
+var g_attach_rounds: int32 = 0;
+
+fn h_a(ev: TmEvent*, cfg: rawptr) {
+  atomic_inc_i32(&g_cnt_a);
+}
+
+fn h_b(ev: TmEvent*, cfg: rawptr) {
+  atomic_inc_i32(&g_cnt_b);
+}
+
+fn worker(_arg: cstring) -> uint32 {
+  var meas: TmKV[1];
+  meas[0] = tm_int("n", 1);
+  for i in 0..CALLS {
+    tm_execute(g_event, &meas[0], 1, 0, 0);
+  }
+  atomic_inc_i32(&g_workers_done);
+  return 0;
+}
+
+// Attaches and detaches handler B until every worker is done.
+fn flipper(_arg: cstring) -> uint32 {
+  var rounds: int32 = 0;
+  while (atomic_compare_exchange_i32(&g_workers_done, 0, 0) < WORKERS) {
+    if (tm_attach("b", "stress", &h_b, 0) != TM_OK) { atomic_inc_i32(&g_attach_errs); }
+    if (tm_detach("b") != TM_OK) { atomic_inc_i32(&g_attach_errs); }
+    rounds = rounds + 1;
+    // Keep the retired tables (freed only at shutdown) from piling up.
+    if (rounds % 64 == 0) { thread_sleep_ms(1); }
+  }
+  g_attach_rounds = rounds;
+  return 0;
+}
+
+fn main() -> int32 {
+  tc_rc("init", tm_init(), TM_OK);
+  g_event = tm_event("stress.event");
+  tc_rc("attach A", tm_attach("a", "stress", &h_a, 0), TM_OK);
+
+  var hs: int64[9];
+  var started: int32 = 0;
+  for i in 0..WORKERS {
+    hs[i] = CreateThread(0, 0, &worker, 0, 0, 0);
+    if (hs[i] != 0) { started = started + 1; }
+  }
+  hs[WORKERS] = CreateThread(0, 0, &flipper, 0, 0, 0);
+  tc_rc("threads started", started, WORKERS);
+  tc_ok("flipper started", hs[WORKERS] != 0);
+  for i in 0..9 {
+    if (hs[i] != 0) {
+      thread_join_infinite(hs[i]);
+      thread_close(hs[i]);
+    }
+  }
+
+  tc_rc("handler A count", atomic_compare_exchange_i32(&g_cnt_a, 0, 0), WORKERS * CALLS);
+  tc_rc("every worker finished", g_workers_done, WORKERS);
+  tc_rc("attach/detach never failed", g_attach_errs, 0);
+  tc_ok("flipper ran", g_attach_rounds > 0);
+  tc_ok("B was detached at the end", !tm_has_handlers(g_event) || tm_detach("b") == TM_ERR_NOT_FOUND);
+  tc_rc("B is gone", tm_detach("b"), TM_ERR_NOT_FOUND);
+  tc_rc("A is still attached", tm_detach("a"), TM_OK);
+  tm_shutdown();
+  return tc_finish("t_stress");
+}

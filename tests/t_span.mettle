@@ -1,0 +1,205 @@
+// Spans: .start/.stop/.exception contents, the 16-entry cap, spans copied
+// by value (SPEC section 7, item 7).
+
+import "std/io";
+import "std/thread";
+import "telemetry/telemetry";
+import "tcheck";
+
+// Last event seen by h_record, with copies of its measurements and metadata.
+// Keys and string values are views of string literals, so they stay valid.
+var g_calls: int32 = 0;
+var g_id: int32 = -1;
+var g_n_meas: int32 = 0;
+var g_n_meta: int32 = 0;
+var g_meas: TmKV[16];
+var g_meta: TmKV[16];
+
+fn h_record(ev: TmEvent*, cfg: rawptr) {
+  g_calls = g_calls + 1;
+  g_id = ev->id;
+  g_n_meas = ev->n_meas;
+  g_n_meta = ev->n_meta;
+  for i in 0..ev->n_meas {
+    if (i < 16) { g_meas[i] = ev->meas[i]; }
+  }
+  for i in 0..ev->n_meta {
+    if (i < 16) { g_meta[i] = ev->meta[i]; }
+  }
+}
+
+fn has_key(kvs: TmKV*, n: int32, key: string) -> bool {
+  return tm_kv_find(kvs, n, key) != 0;
+}
+
+fn test_start_stop() {
+  var ev: TmSpanEvents = tm_span_events("sp");
+  tc_rc("span events: start id", ev.start, 0);
+  tc_rc("span events: stop id", ev.stop, 1);
+  tc_rc("span events: exception id", ev.exception, 2);
+  var again: TmSpanEvents = tm_span_events("sp");
+  tc_rc("span events: idempotent", again.exception, 2);
+  tc_rc("attach", tm_attach("rec", "sp", &h_record, 0), TM_OK);
+
+  var meta: TmKV[1];
+  meta[0] = tm_str("route", "/x");
+  var t0: int64 = tm_monotonic_ns();
+  var s: TmSpan = tm_span_start(&ev, &meta[0], 1);
+  tc_rc("start: one call", g_calls, 1);
+  tc_rc("start: event id", g_id, ev.start);
+  tc_rc("start: n_meas", g_n_meas, 2);
+  tc_ok("start: has system_time", has_key(&g_meas[0], g_n_meas, "system_time"));
+  tc_ok("start: has monotonic_time", has_key(&g_meas[0], g_n_meas, "monotonic_time"));
+  var st: TmKV* = tm_kv_find(&g_meas[0], g_n_meas, "system_time");
+  tc_ok("start: system_time is a wall clock", st->val.i > (int64)1600000000 * (int64)1000000000);
+  var mt: TmKV* = tm_kv_find(&g_meas[0], g_n_meas, "monotonic_time");
+  tc_ok("start: monotonic_time in range", mt->val.i >= t0 && mt->val.i <= tm_monotonic_ns());
+  tc_i64("start: monotonic_time is start_mono_ns", mt->val.i, s.start_mono_ns);
+  tc_rc("start: n_meta", g_n_meta, 1);
+  tc_str("start: meta passed through", g_meta[0].val.s, "/x");
+
+  thread_sleep_ms(20);
+  var meas: TmKV[1];
+  meas[0] = tm_int("bytes", 123);
+  tm_span_stop(&s, &meas[0], 1, &meta[0], 1);
+  tc_rc("stop: two calls", g_calls, 2);
+  tc_rc("stop: event id", g_id, ev.stop);
+  tc_rc("stop: n_meas", g_n_meas, 2);
+  tc_str("stop: duration_ns is first", g_meas[0].key, "duration_ns");
+  tc_ok("stop: duration >= 0", g_meas[0].val.i >= 0);
+  tc_ok("stop: duration >= sleep", g_meas[0].val.i >= 15000000);
+  tc_ok("stop: duration is not absurd", g_meas[0].val.i < (int64)10 * (int64)1000000000);
+  tc_i64("stop: caller measurement", tm_kv_find(&g_meas[0], g_n_meas, "bytes")->val.i, 123);
+  tc_ok("stop: no system_time", !has_key(&g_meas[0], g_n_meas, "system_time"));
+  tc_ok("stop: no monotonic_time", !has_key(&g_meas[0], g_n_meas, "monotonic_time"));
+  tc_rc("stop: n_meta", g_n_meta, 1);
+  tc_str("stop: meta passed through", g_meta[0].val.s, "/x");
+
+  // A stop right away, with no extra measurements.
+  var s2: TmSpan = tm_span_start(&ev, 0, 0);
+  tm_span_stop(&s2, 0, 0, 0, 0);
+  tc_rc("quick stop: n_meas", g_n_meas, 1);
+  tc_ok("quick stop: duration >= 0", g_meas[0].val.i >= 0);
+  tc_rc("quick stop: n_meta", g_n_meta, 0);
+  tc_rc("quick stop: calls", g_calls, 4);
+  tm_detach("rec");
+}
+
+fn test_exception() {
+  var ev: TmSpanEvents = tm_span_events("ex");
+  tm_attach("rec", "ex", &h_record, 0);
+  g_calls = 0;
+  var meta: TmKV[1];
+  meta[0] = tm_str("route", "/y");
+  var s: TmSpan = tm_span_start(&ev, &meta[0], 1);
+  thread_sleep_ms(20);
+  var meas: TmKV[1];
+  meas[0] = tm_int("bytes", 7);
+  tm_span_exception(&s, "io", "timeout", &meas[0], 1, &meta[0], 1);
+  tc_rc("exception: two calls", g_calls, 2);
+  tc_rc("exception: event id", g_id, ev.exception);
+  tc_rc("exception: n_meas", g_n_meas, 2);
+  tc_str("exception: duration_ns first", g_meas[0].key, "duration_ns");
+  tc_ok("exception: duration >= sleep", g_meas[0].val.i >= 15000000);
+  tc_ok("exception: no system_time", !has_key(&g_meas[0], g_n_meas, "system_time"));
+  tc_rc("exception: n_meta", g_n_meta, 3);
+  tc_str("exception: caller meta first", g_meta[0].key, "route");
+  tc_str("exception: kind", tm_kv_find(&g_meta[0], g_n_meta, "kind")->val.s, "io");
+  tc_str("exception: reason", tm_kv_find(&g_meta[0], g_n_meta, "reason")->val.s, "timeout");
+  tc_rc("exception: reason kind is string", tm_kv_find(&g_meta[0], g_n_meta, "reason")->val.kind, TM_STR);
+  // No caller metadata.
+  tm_span_exception(&s, "k", "r", 0, 0, 0, 0);
+  tc_rc("exception no meta: n_meta", g_n_meta, 2);
+  tc_str("exception no meta: kind", g_meta[0].key, "kind");
+  tc_str("exception no meta: reason", g_meta[1].key, "reason");
+  tm_detach("rec");
+}
+
+fn test_cap() {
+  var ev: TmSpanEvents = tm_span_events("cap");
+  tm_attach("rec", "cap", &h_record, 0);
+  var big: TmKV[20];
+  for i in 0..20 { big[i] = tm_int("m", (int64)i); }
+  var s: TmSpan = tm_span_start(&ev, &big[0], 20);
+  tc_rc("cap: start passes caller meta uncapped", g_n_meta, 20);
+  tm_span_stop(&s, &big[0], 20, &big[0], 3);
+  tc_rc("cap: stop n_meas", g_n_meas, 16);
+  tc_str("cap: stop duration first", g_meas[0].key, "duration_ns");
+  tc_i64("cap: stop first caller entry", g_meas[1].val.i, 0);
+  tc_i64("cap: stop last kept entry", g_meas[15].val.i, 14);
+  tc_rc("cap: stop n_meta not capped", g_n_meta, 3);
+  // Exactly 15 caller entries fit.
+  tm_span_stop(&s, &big[0], 15, 0, 0);
+  tc_rc("cap: 15 entries fit", g_n_meas, 16);
+  tc_i64("cap: 15 entries, last", g_meas[15].val.i, 14);
+  tm_span_stop(&s, &big[0], 14, 0, 0);
+  tc_rc("cap: 14 entries", g_n_meas, 15);
+
+  tm_span_exception(&s, "kk", "rr", &big[0], 20, &big[0], 20);
+  tc_rc("cap: exception n_meas", g_n_meas, 16);
+  tc_i64("cap: exception last meas", g_meas[15].val.i, 14);
+  tc_rc("cap: exception n_meta", g_n_meta, 16);
+  tc_i64("cap: exception last caller meta", g_meta[13].val.i, 13);
+  tc_str("cap: exception kind kept", g_meta[14].key, "kind");
+  tc_str("cap: exception reason kept", g_meta[15].key, "reason");
+  tc_str("cap: exception kind value", g_meta[14].val.s, "kk");
+  tc_str("cap: exception reason value", g_meta[15].val.s, "rr");
+  tm_span_exception(&s, "kk", "rr", 0, 0, &big[0], 14);
+  tc_rc("cap: exception 14 meta fit", g_n_meta, 16);
+  tm_span_exception(&s, "kk", "rr", 0, 0, &big[0], 13);
+  tc_rc("cap: exception 13 meta", g_n_meta, 15);
+  tm_detach("rec");
+}
+
+fn test_copy() {
+  var ev: TmSpanEvents = tm_span_events("cp");
+  tm_attach("rec", "cp", &h_record, 0);
+  g_calls = 0;
+  var s: TmSpan = tm_span_start(&ev, 0, 0);
+  var copy: TmSpan = s;
+  // The event ids are held by value, so the original events can go away.
+  ev.start = -1;
+  ev.stop = -1;
+  ev.exception = -1;
+  tc_rc("copy: same stop id", copy.stop, s.stop);
+  tc_i64("copy: same start time", copy.start_mono_ns, s.start_mono_ns);
+  thread_sleep_ms(20);
+  tm_span_stop(&copy, 0, 0, 0, 0);
+  tc_rc("copy: stop called", g_calls, 2);
+  tc_rc("copy: stop id", g_id, s.stop);
+  tc_ok("copy: duration >= sleep", g_meas[0].val.i >= 15000000);
+  // The original stops too, and a second copy can raise an exception.
+  tm_span_stop(&s, 0, 0, 0, 0);
+  tc_rc("copy: original still works", g_calls, 3);
+  var copy2: TmSpan = copy;
+  tm_span_exception(&copy2, "k", "r", 0, 0, 0, 0);
+  tc_rc("copy: exception id", g_id, s.exception);
+  tm_detach("rec");
+}
+
+// With handlers on only one of the three events, the others do nothing.
+fn test_partial() {
+  var ev: TmSpanEvents = tm_span_events("pt");
+  tm_attach("only_stop", "pt.stop", &h_record, 0);
+  g_calls = 0;
+  var s: TmSpan = tm_span_start(&ev, 0, 0);
+  tc_rc("partial: start makes no call", g_calls, 0);
+  tm_span_exception(&s, "k", "r", 0, 0, 0, 0);
+  tc_rc("partial: exception makes no call", g_calls, 0);
+  tm_span_stop(&s, 0, 0, 0, 0);
+  tc_rc("partial: stop calls", g_calls, 1);
+  tm_detach("only_stop");
+  tm_span_stop(&s, 0, 0, 0, 0);
+  tc_rc("partial: no handlers, no call", g_calls, 1);
+}
+
+fn main() -> int32 {
+  tc_rc("init", tm_init(), TM_OK);
+  test_start_stop();
+  test_exception();
+  test_cap();
+  test_copy();
+  test_partial();
+  tm_shutdown();
+  return tc_finish("t_span");
+}

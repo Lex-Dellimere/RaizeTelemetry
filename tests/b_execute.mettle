@@ -1,0 +1,65 @@
+// Benchmark: tm_execute and tm_has_handlers on an event with no handlers
+// (SPEC section 7, item 9). With --assert it fails if tm_execute costs
+// 5 ns per call or more; mbuild test-programs passes --assert in release only.
+
+import "std/io";
+import "std/conv";
+import "telemetry/telemetry";
+import "tcheck";
+
+const N = 50000000;
+const LIMIT_NS = 5.0;
+
+// Results are accumulated here and printed, so the loops cannot be removed.
+var g_sink: int64 = 0;
+
+fn bench_execute(id: int32, meas: TmKV*) -> int64 {
+  var t0: int64 = tm_monotonic_ns();
+  for i in 0..N {
+    tm_execute(id, meas, 1, 0, 0);
+    g_sink = g_sink + (int64)i;
+  }
+  return tm_monotonic_ns() - t0;
+}
+
+fn bench_has(id: int32) -> int64 {
+  var t0: int64 = tm_monotonic_ns();
+  for i in 0..N {
+    if (tm_has_handlers(id)) { g_sink = g_sink + 1000003; }
+    g_sink = g_sink + (int64)(i & 1);
+  }
+  return tm_monotonic_ns() - t0;
+}
+
+fn main(argc: int32, argv: cstring*) -> int32 {
+  var check: bool = false;
+  for i in 1..argc {
+    if (str_from_cstr(argv[i]) == "--assert") { check = true; }
+  }
+  tc_rc("init", tm_init(), TM_OK);
+  var id: int32 = tm_event("bench.none");
+  tc_ok("event has no handlers", !tm_has_handlers(id));
+  var meas: TmKV[1];
+  meas[0] = tm_int("n", 1);
+
+  bench_execute(id, &meas[0]);   // warm-up
+  var t_exec: int64 = bench_execute(id, &meas[0]);
+  bench_has(id);
+  var t_has: int64 = bench_has(id);
+
+  var ns_exec: float64 = (float64)t_exec / (float64)N;
+  var ns_has: float64 = (float64)t_has / (float64)N;
+  println("tm_execute      {ns_exec} ns/call ({N} calls, no handlers)");
+  println("tm_has_handlers {ns_has} ns/call ({N} calls, no handlers)");
+  println("sink {g_sink}");
+  tm_shutdown();
+
+  var rc: int32 = tc_finish("b_execute");
+  if (check) {
+    if (ns_exec >= LIMIT_NS) {
+      println("FAIL tm_execute {ns_exec} ns/call, limit {LIMIT_NS}");
+      rc = 1;
+    }
+  }
+  return rc;
+}

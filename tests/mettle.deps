@@ -1,0 +1,5 @@
+# >>> mbuild: generated, edits inside this block are overwritten
+telemetry=../src
+telemetry_tests=.
+mbuild=./.mbuild/api/mbuild
+# <<< mbuild

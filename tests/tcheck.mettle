@@ -1,0 +1,52 @@
+// Shared checks for the telemetry test programs (test-only, not part of the
+// library). Each suite counts checks and prints one result line.
+
+import "std/io";
+import "std/conv";
+
+var g_tc_checks: int32 = 0;
+var g_tc_fails: int32 = 0;
+
+export fn tc_ok(name: string, cond: bool) {
+  g_tc_checks = g_tc_checks + 1;
+  if (!cond) {
+    g_tc_fails = g_tc_fails + 1;
+    println("FAIL " + name);
+  }
+}
+
+export fn tc_rc(name: string, got: int32, want: int32) {
+  g_tc_checks = g_tc_checks + 1;
+  if (got != want) {
+    g_tc_fails = g_tc_fails + 1;
+    println("FAIL " + name + ": status {got}, want {want}");
+  }
+}
+
+export fn tc_str(name: string, got: string, want: string) {
+  g_tc_checks = g_tc_checks + 1;
+  if (got != want) {
+    g_tc_fails = g_tc_fails + 1;
+    println("FAIL " + name);
+    println("  got  [" + got + "]");
+    println("  want [" + want + "]");
+  }
+}
+
+export fn tc_i64(name: string, got: int64, want: int64) {
+  g_tc_checks = g_tc_checks + 1;
+  if (got != want) {
+    g_tc_fails = g_tc_fails + 1;
+    println("FAIL " + name + ": {got}, want {want}");
+  }
+}
+
+// Prints the suite's one result line; returns the exit code.
+export fn tc_finish(suite: string) -> int32 {
+  if (g_tc_fails == 0) {
+    println("OK " + suite + " ({g_tc_checks} checks)");
+    return 0;
+  }
+  println("FAILED " + suite + " ({g_tc_fails} of {g_tc_checks} checks)");
+  return 1;
+}

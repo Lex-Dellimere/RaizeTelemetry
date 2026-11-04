@@ -1,0 +1,346 @@
+// Core: init/shutdown, events, prefix matching, attach/detach, order,
+// invalid ids, handlers that attach (SPEC section 7, items 1-6 and 11).
+
+import "std/io";
+import "telemetry/telemetry";
+import "tcheck";
+
+// Every handler appends tag * 1000 + event id to the log.
+var g_log: int32[64];
+var g_nlog: int32 = 0;
+var g_tag1: int32 = 1;
+var g_tag2: int32 = 2;
+var g_tag3: int32 = 3;
+var g_tag4: int32 = 4;
+
+// Last event seen by h_capture.
+var g_cap_calls: int32 = 0;
+var g_cap_name: string = "";
+var g_cap_n_meas: int32 = 0;
+var g_cap_n_meta: int32 = 0;
+var g_cap_x: int64 = 0;
+var g_cap_label: string = "";
+
+// h_reenter attaches h_log under "inner" the first time it runs.
+var g_reenter_rc: int32 = 99;
+var g_reenter_calls: int32 = 0;
+
+fn h_log(ev: TmEvent*, cfg: rawptr) {
+  var tag: int32* = cfg;
+  if (g_nlog < 64) {
+    g_log[g_nlog] = *tag * 1000 + ev->id;
+  }
+  g_nlog = g_nlog + 1;
+}
+
+fn h_capture(ev: TmEvent*, cfg: rawptr) {
+  g_cap_calls = g_cap_calls + 1;
+  g_cap_name = ev->name;
+  g_cap_n_meas = ev->n_meas;
+  g_cap_n_meta = ev->n_meta;
+  var x: TmKV* = tm_kv_find(ev->meas, ev->n_meas, "x");
+  if (x != 0) { g_cap_x = x->val.i; }
+  var l: TmKV* = tm_kv_find(ev->meta, ev->n_meta, "label");
+  if (l != 0) { g_cap_label = l->val.s; }
+}
+
+fn h_reenter(ev: TmEvent*, cfg: rawptr) {
+  g_reenter_calls = g_reenter_calls + 1;
+  if (g_reenter_calls == 1) {
+    g_reenter_rc = tm_attach("inner", "", &h_log, &g_tag4);
+  }
+}
+
+fn log_reset() {
+  g_nlog = 0;
+}
+
+// Executes an event with no measurements or metadata.
+fn fire(id: int32) {
+  tm_execute(id, 0, 0, 0, 0);
+}
+
+fn test_uninit() {
+  tc_rc("uninit: tm_event", tm_event("a"), TM_ERR_UNINIT);
+  tc_rc("uninit: tm_attach", tm_attach("h", "a", &h_log, &g_tag1), TM_ERR_UNINIT);
+  var ps: string[1] = ["a"];
+  tc_rc("uninit: tm_attach_many", tm_attach_many("h", &ps[0], 1, &h_log, &g_tag1), TM_ERR_UNINIT);
+  tc_rc("uninit: tm_detach", tm_detach("h"), TM_ERR_UNINIT);
+  tc_ok("uninit: has_handlers false", !tm_has_handlers(0));
+  fire(0);
+  tc_rc("uninit: execute makes no calls", g_nlog, 0);
+  tm_shutdown();
+  tc_rc("uninit: shutdown before init is a no-op", tm_event("a"), TM_ERR_UNINIT);
+}
+
+// Item 1.
+fn test_events() {
+  tc_rc("init", tm_init(), TM_OK);
+  tc_rc("init again", tm_init(), TM_OK);
+  tc_rc("event a is 0", tm_event("a"), 0);
+  tc_rc("event b is 1", tm_event("b"), 1);
+  tc_rc("event a again is 0", tm_event("a"), 0);
+  tc_rc("event a.b is 2", tm_event("a.b"), 2);
+  tc_rc("event c is 3", tm_event("c"), 3);
+  tc_rc("event b again is 1", tm_event("b"), 1);
+  tc_rc("init keeps events", tm_init(), TM_OK);
+  tc_rc("event a after second init", tm_event("a"), 0);
+  tc_rc("event c after second init", tm_event("c"), 3);
+  tc_rc("event d is 4", tm_event("d"), 4);
+  tm_shutdown();
+}
+
+// Item 2.
+fn test_prefix() {
+  tm_init();
+  var e_a: int32 = tm_event("a");
+  var e_ab: int32 = tm_event("a.b");
+  var e_abc: int32 = tm_event("a.b.c");
+  var e_abx: int32 = tm_event("a.bc");
+  var e_b: int32 = tm_event("b");
+  tm_attach("p", "a.b", &h_log, &g_tag1);
+  log_reset();
+  fire(e_a);
+  tc_rc("prefix a.b: a no call", g_nlog, 0);
+  fire(e_ab);
+  tc_rc("prefix a.b: a.b one call", g_nlog, 1);
+  fire(e_abc);
+  tc_rc("prefix a.b: a.b.c two calls", g_nlog, 2);
+  fire(e_abx);
+  tc_rc("prefix a.b: a.bc not matched", g_nlog, 2);
+  fire(e_b);
+  tc_rc("prefix a.b: b not matched", g_nlog, 2);
+  tc_rc("prefix a.b: log 0", g_log[0], 1000 + e_ab);
+  tc_rc("prefix a.b: log 1", g_log[1], 1000 + e_abc);
+  tc_ok("has_handlers a.b", tm_has_handlers(e_ab));
+  tc_ok("has_handlers a.b.c", tm_has_handlers(e_abc));
+  tc_ok("no has_handlers a", !tm_has_handlers(e_a));
+  tc_ok("no has_handlers a.bc", !tm_has_handlers(e_abx));
+  tm_detach("p");
+  tc_ok("detached: no has_handlers a.b", !tm_has_handlers(e_ab));
+
+  tm_attach("all", "", &h_log, &g_tag2);
+  log_reset();
+  fire(e_a);
+  fire(e_ab);
+  fire(e_abc);
+  fire(e_abx);
+  fire(e_b);
+  tc_rc("empty prefix: matches everything", g_nlog, 5);
+  tc_rc("empty prefix: first", g_log[0], 2000 + e_a);
+  tc_rc("empty prefix: last", g_log[4], 2000 + e_b);
+  tm_shutdown();
+}
+
+// Item 3.
+fn test_late_event() {
+  tm_init();
+  tm_attach("late", "x.y", &h_log, &g_tag1);
+  tm_attach("lall", "", &h_log, &g_tag2);
+  var id: int32 = tm_event("x.y.z");
+  var other: int32 = tm_event("q");
+  log_reset();
+  fire(id);
+  tc_rc("late event: two handlers", g_nlog, 2);
+  tc_rc("late event: first", g_log[0], 1000 + id);
+  tc_rc("late event: second", g_log[1], 2000 + id);
+  tc_ok("late event: has_handlers", tm_has_handlers(id));
+  log_reset();
+  fire(other);
+  tc_rc("late event: other only matches empty", g_nlog, 1);
+  tc_rc("late event: other tag", g_log[0], 2000 + other);
+  tm_shutdown();
+}
+
+// Item 4.
+fn test_attach_detach() {
+  tm_init();
+  var e1: int32 = tm_event("m.one");
+  var e2: int32 = tm_event("n.two");
+  var ps: string[2] = ["m", "n"];
+  tc_rc("attach_many", tm_attach_many("h", &ps[0], 2, &h_log, &g_tag1), TM_OK);
+  tc_rc("duplicate id with attach", tm_attach("h", "m", &h_log, &g_tag2), TM_ERR_EXISTS);
+  tc_rc("duplicate id with attach_many", tm_attach_many("h", &ps[0], 2, &h_log, &g_tag2), TM_ERR_EXISTS);
+  log_reset();
+  fire(e1);
+  fire(e2);
+  tc_rc("duplicate did not add calls", g_nlog, 2);
+  tc_rc("detach removes from both events", tm_detach("h"), TM_OK);
+  tc_ok("detached: e1", !tm_has_handlers(e1));
+  tc_ok("detached: e2", !tm_has_handlers(e2));
+  log_reset();
+  fire(e1);
+  fire(e2);
+  tc_rc("detached: no calls", g_nlog, 0);
+  tc_rc("detach again", tm_detach("h"), TM_ERR_NOT_FOUND);
+  tc_rc("detach unknown", tm_detach("nope"), TM_ERR_NOT_FOUND);
+  tc_rc("attach after detach", tm_attach("h", "m", &h_log, &g_tag1), TM_OK);
+  tc_ok("attach after detach: has_handlers", tm_has_handlers(e1));
+  tc_rc("attach_many n=0", tm_attach_many("z", &ps[0], 0, &h_log, &g_tag1), TM_ERR_ARG);
+  tc_rc("attach_many n<0", tm_attach_many("z", &ps[0], -1, &h_log, &g_tag1), TM_ERR_ARG);
+  tc_rc("attach_many n=0 did not attach", tm_detach("z"), TM_ERR_NOT_FOUND);
+  tm_shutdown();
+}
+
+// Item 5.
+fn test_order() {
+  tm_init();
+  var e: int32 = tm_event("a.b");
+  var ps: string[3] = ["a", "a.b", ""];
+  tm_attach("first", "a", &h_log, &g_tag1);
+  tm_attach_many("multi", &ps[0], 3, &h_log, &g_tag2);
+  tm_attach("last", "a.b", &h_log, &g_tag3);
+  log_reset();
+  fire(e);
+  tc_rc("order: three calls", g_nlog, 3);
+  tc_rc("order: first", g_log[0], 1000 + e);
+  tc_rc("order: multi once", g_log[1], 2000 + e);
+  tc_rc("order: last", g_log[2], 3000 + e);
+  // An event registered later keeps the same order.
+  var e2: int32 = tm_event("a.b.c");
+  log_reset();
+  fire(e2);
+  tc_rc("order late: three calls", g_nlog, 3);
+  tc_rc("order late: first", g_log[0], 1000 + e2);
+  tc_rc("order late: multi once", g_log[1], 2000 + e2);
+  tc_rc("order late: last", g_log[2], 3000 + e2);
+  // Detaching the middle handler keeps the rest in order.
+  tm_detach("multi");
+  log_reset();
+  fire(e);
+  tc_rc("order after detach: two calls", g_nlog, 2);
+  tc_rc("order after detach: first", g_log[0], 1000 + e);
+  tc_rc("order after detach: last", g_log[1], 3000 + e);
+  tm_shutdown();
+}
+
+// Item 6.
+fn test_no_handlers() {
+  tm_init();
+  var e: int32 = tm_event("quiet");
+  var meas: TmKV[1];
+  meas[0] = tm_int("x", 1);
+  log_reset();
+  tm_execute(e, &meas[0], 1, 0, 0);
+  tc_rc("no handlers: no calls", g_nlog, 0);
+  tc_ok("no handlers: has_handlers false", !tm_has_handlers(e));
+  tm_attach("all", "", &h_log, &g_tag1);
+  tm_execute(-1, &meas[0], 1, 0, 0);
+  tm_execute(-100, 0, 0, 0, 0);
+  tm_execute(1, &meas[0], 1, 0, 0);
+  tm_execute(1000000, &meas[0], 1, 0, 0);
+  tm_execute(2147483647, 0, 0, 0, 0);
+  tc_rc("invalid ids: no calls", g_nlog, 0);
+  tc_ok("has_handlers -1", !tm_has_handlers(-1));
+  tc_ok("has_handlers past the end", !tm_has_handlers(1));
+  tc_ok("has_handlers huge", !tm_has_handlers(2147483647));
+  tm_execute(e, &meas[0], 1, 0, 0);
+  tc_rc("valid id still works", g_nlog, 1);
+  tm_shutdown();
+}
+
+// What a handler sees: name, measurements, metadata, tm_kv_find.
+fn test_payload() {
+  tm_init();
+  var e: int32 = tm_event("pay.load");
+  tm_attach("cap", "pay", &h_capture, 0);
+  var meas: TmKV[2];
+  meas[0] = tm_int("y", 5);
+  meas[1] = tm_int("x", 42);
+  var meta: TmKV[2];
+  meta[0] = tm_bool("flag", true);
+  meta[1] = tm_str("label", "hello");
+  tm_execute(e, &meas[0], 2, &meta[0], 2);
+  tc_rc("payload: one call", g_cap_calls, 1);
+  tc_str("payload: name", g_cap_name, "pay.load");
+  tc_rc("payload: n_meas", g_cap_n_meas, 2);
+  tc_rc("payload: n_meta", g_cap_n_meta, 2);
+  tc_i64("payload: kv_find meas", g_cap_x, 42);
+  tc_str("payload: kv_find meta", g_cap_label, "hello");
+  tm_execute(e, 0, 0, 0, 0);
+  tc_rc("payload: empty call", g_cap_calls, 2);
+  tc_rc("payload: empty n_meas", g_cap_n_meas, 0);
+
+  var f: TmKV* = tm_kv_find(&meas[0], 2, "y");
+  tc_ok("kv_find: found y", f != 0);
+  tc_i64("kv_find: y value", f->val.i, 5);
+  tc_rc("kv_find: kind", f->val.kind, TM_INT);
+  tc_ok("kv_find: points into the array", f == &meas[0]);
+  tc_ok("kv_find: absent is 0", tm_kv_find(&meas[0], 2, "nope") == 0);
+  tc_ok("kv_find: n=0 is 0", tm_kv_find(&meas[0], 0, "y") == 0);
+  tc_ok("kv_find: respects n", tm_kv_find(&meas[0], 1, "x") == 0);
+  var dup: TmKV[2];
+  dup[0] = tm_int("k", 1);
+  dup[1] = tm_int("k", 2);
+  tc_i64("kv_find: first of duplicates", tm_kv_find(&dup[0], 2, "k")->val.i, 1);
+  var g: TmKV* = tm_kv_find(&meta[0], 2, "flag");
+  tc_rc("kv_find: bool kind", g->val.kind, TM_BOOL);
+  tc_i64("kv_find: bool value", g->val.i, 1);
+  var fl: TmKV = tm_f64("f", 2.5);
+  tc_rc("tm_f64 kind", fl.val.kind, TM_F64);
+  tc_ok("tm_f64 value", fl.val.f == 2.5);
+  tm_shutdown();
+}
+
+// Item 11.
+fn test_reenter() {
+  tm_init();
+  var e: int32 = tm_event("re.enter");
+  tm_attach("outer", "re", &h_reenter, 0);
+  log_reset();
+  g_reenter_rc = 99;
+  g_reenter_calls = 0;
+  fire(e);
+  tc_rc("reenter: returned", g_reenter_calls, 1);
+  tc_rc("reenter: attach from handler ok", g_reenter_rc, TM_OK);
+  tc_rc("reenter: inner not run by the same execute", g_nlog, 0);
+  fire(e);
+  tc_rc("reenter: outer ran again", g_reenter_calls, 2);
+  tc_rc("reenter: inner ran on the next execute", g_nlog, 1);
+  tc_rc("reenter: inner tag", g_log[0], 4000 + e);
+  tc_rc("reenter: inner is attached", tm_attach("inner", "", &h_log, &g_tag4), TM_ERR_EXISTS);
+  tc_rc("reenter: detach inner", tm_detach("inner"), TM_OK);
+  tm_shutdown();
+}
+
+// Item: shutdown then init again.
+fn test_restart() {
+  tm_init();
+  var e: int32 = tm_event("r.one");
+  tm_attach("h", "r", &h_log, &g_tag1);
+  tm_shutdown();
+  tc_rc("after shutdown: event", tm_event("r.one"), TM_ERR_UNINIT);
+  tc_rc("after shutdown: attach", tm_attach("h", "r", &h_log, &g_tag1), TM_ERR_UNINIT);
+  tc_rc("after shutdown: detach", tm_detach("h"), TM_ERR_UNINIT);
+  tc_ok("after shutdown: has_handlers", !tm_has_handlers(e));
+  log_reset();
+  fire(e);
+  tc_rc("after shutdown: execute makes no calls", g_nlog, 0);
+  tm_shutdown();
+  for round in 0..3 {
+    tc_rc("restart: init", tm_init(), TM_OK);
+    tc_rc("restart: ids start at 0", tm_event("fresh"), 0);
+    tc_rc("restart: second id", tm_event("fresh.two"), 1);
+    tc_ok("restart: no old handlers", !tm_has_handlers(0));
+    tc_rc("restart: handler id is free", tm_attach("h", "fresh", &h_log, &g_tag2), TM_OK);
+    log_reset();
+    fire(1);
+    tc_rc("restart: handler runs", g_nlog, 1);
+    tc_rc("restart: handler tag", g_log[0], 2001);
+    tm_shutdown();
+  }
+}
+
+fn main() -> int32 {
+  test_uninit();
+  test_events();
+  test_prefix();
+  test_late_event();
+  test_attach_detach();
+  test_order();
+  test_no_handlers();
+  test_payload();
+  test_reenter();
+  test_restart();
+  return tc_finish("t_core");
+}
