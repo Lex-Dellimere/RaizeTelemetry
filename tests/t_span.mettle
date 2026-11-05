@@ -3,7 +3,7 @@
 
 import "std/io";
 import "std/thread";
-import "telemetry/telemetry";
+import "raize_telemetry/raize_telemetry";
 import "tcheck";
 
 // Last event seen by h_record, with copies of its measurements and metadata.

@@ -1,7 +1,7 @@
 import "mbuild/api";
 
-// Test programs for telemetry. They are a separate package that depends on
-// telemetry by path. Run them from the telemetry root with
+// Test programs for raize_telemetry. They are a separate package that depends on
+// raize_telemetry by path. Run them from the raize_telemetry root with
 // `mbuild test-programs`.
 fn project() {
   mb_package("telemetry_tests", "0.1.0");
@@ -12,5 +12,5 @@ fn project() {
 }
 
 fn deps() {
-  mb_dep_path("telemetry", "..");
+  mb_dep_path("raize_telemetry", "..");
 }

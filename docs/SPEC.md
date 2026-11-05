@@ -1,8 +1,8 @@
-# telemetry (`tm_`): API spec v0.2 (approved by raize_web 2026-11-05)
+# raize_telemetry (`tm_`): API spec v0.2 (approved by raize_web 2026-11-05)
 
 **Release plan:** v0.1 ships events, handlers, spans and the clock (§1–§4), which is all raize INSTR needs. Metrics (§5) follow in v0.2.
 
-A generic, dependency-free Mettle package for named events, handlers, spans and metrics, in the style of Elixir `:telemetry` and `telemetry_metrics`. The mbuild package name is `telemetry`, so imports look like `import "telemetry/telemetry"`. The public prefix is `tm_` / `Tm` / `TM_`, and internals use `tm__`. The package uses Mettle stdlib only: `std/thread` mutex. It has no exporters.
+A generic, dependency-free Mettle package for named events, handlers, spans and metrics, in the style of Elixir `:telemetry` and `telemetry_metrics`. The mbuild package name is `raize_telemetry`, so imports look like `import "raize_telemetry/raize_telemetry"`. The public prefix is `tm_` / `Tm` / `TM_`, and internals use `tm__`. The package uses Mettle stdlib only: `std/thread` mutex. It has no exporters.
 
 Sources: raize_web reports/030, `.apex/DECISIONS.md` D8, and raize_web review 2026-11-05.
 
@@ -134,7 +134,7 @@ fn tm_metric_dropped(m: TmMetric*) -> int64
 ## 6. Layout
 
 ```
-src/telemetry.mettle             public facade (re-exports); import "telemetry/telemetry"
+src/raize_telemetry.mettle       public facade (re-exports); import "raize_telemetry/raize_telemetry"
 src/value.mettle                 TmValue, TmKV, constructors, tm_kv_find
 src/core.mettle                  table build, prefix match, init/shutdown, tm_event, attach/detach, execute
 src/span.mettle                  spans
@@ -142,7 +142,7 @@ src/metrics.mettle               reducers, series table, snapshots (v0.2)
 src/sys/atomic.mettle            tm__load_ptr / tm__store_ptr_sc (@naked x86-64)
 src/sys/clock.mettle             clock_gettime extern
 tests/                           see below
-mbuild.mettle                    mbuild manifest at root: mb_package("telemetry", ...), lib only
+mbuild.mettle                    mbuild manifest at root: mb_package("raize_telemetry", ...), lib only
 ```
 
 ## 7. Acceptance tests

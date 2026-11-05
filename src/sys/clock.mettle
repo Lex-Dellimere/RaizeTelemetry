@@ -1,4 +1,4 @@
-// telemetry/sys/clock: monotonic and wall-clock time in nanoseconds (Linux).
+// raize_telemetry/sys/clock: monotonic and wall-clock time in nanoseconds (Linux).
 //
 // There is no std/time yet (Mettle 018). The runtime's clock_gettime is a
 // raw syscall with no libc, the same one std/bench and raize use. Replace

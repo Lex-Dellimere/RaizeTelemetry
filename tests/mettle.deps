@@ -1,5 +1,5 @@
 # >>> mbuild: generated, edits inside this block are overwritten
-telemetry=../src
+raize_telemetry=../src
 telemetry_tests=.
 mbuild=./.mbuild/api/mbuild
 # <<< mbuild

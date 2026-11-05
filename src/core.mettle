@@ -1,4 +1,4 @@
-// telemetry/core: event registry, handlers, execute.
+// raize_telemetry/core: event registry, handlers, execute.
 //
 // The live state is one immutable TmTable, published through g_tm_table.
 // Writers (tm_event, tm_attach*, tm_detach) take g_tm_mutex, build a new

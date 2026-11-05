@@ -1,4 +1,4 @@
-// telemetry/sys/atomic: pointer atomics on x86-64 (Linux, System V ABI).
+// raize_telemetry/sys/atomic: pointer atomics on x86-64 (Linux, System V ABI).
 //
 // Mettle has no host atomic built-ins yet (Mettle reports/008), so these are
 // @naked functions, the technique alph uses in alph/src/sys/atomic.mettle.

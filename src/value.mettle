@@ -1,4 +1,4 @@
-// telemetry/value: measurement and metadata values.
+// raize_telemetry/value: measurement and metadata values.
 //
 // A TmKV array is owned by the caller (usually on its stack) and borrowed by
 // tm_execute for the call only. Keys and string values are views: a handler

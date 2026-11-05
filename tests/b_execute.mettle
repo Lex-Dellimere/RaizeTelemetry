@@ -4,7 +4,7 @@
 
 import "std/io";
 import "std/conv";
-import "telemetry/telemetry";
+import "raize_telemetry/raize_telemetry";
 import "tcheck";
 
 const N = 50000000;

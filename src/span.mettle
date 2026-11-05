@@ -1,4 +1,4 @@
-// telemetry/span: start / stop / exception events around a piece of work.
+// raize_telemetry/span: start / stop / exception events around a piece of work.
 //
 //   g_req = tm_span_events("raize.request");            // once, at startup
 //   var s: TmSpan = tm_span_start(&g_req, &meta[0], 2);

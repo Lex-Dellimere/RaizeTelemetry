@@ -2,7 +2,7 @@
 // invalid ids, handlers that attach (SPEC section 7, items 1-6 and 11).
 
 import "std/io";
-import "telemetry/telemetry";
+import "raize_telemetry/raize_telemetry";
 import "tcheck";
 
 // Every handler appends tag * 1000 + event id to the log.

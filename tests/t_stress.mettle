@@ -5,7 +5,7 @@
 
 import "std/io";
 import "std/thread";
-import "telemetry/telemetry";
+import "raize_telemetry/raize_telemetry";
 import "tcheck";
 
 const WORKERS = 8;

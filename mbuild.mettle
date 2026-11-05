@@ -1,9 +1,9 @@
 import "mbuild/api";
 
-// telemetry: named events, handlers and spans (Elixir :telemetry style).
+// raize_telemetry: named events, handlers and spans (Elixir :telemetry style).
 // Pure Mettle, no dependencies. Linux x86-64 (asm atomics, raw clock).
 fn project() {
-  mb_package("telemetry", "0.1.0");
+  mb_package("raize_telemetry", "0.1.0");
   mb_meta("description", "named events with measurements and metadata, attachable handlers, spans; lock-free execute");
   mb_meta("license", "Apache-2.0");
   mb_import_root("src");

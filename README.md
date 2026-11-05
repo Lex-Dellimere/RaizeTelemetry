@@ -1,13 +1,13 @@
-# telemetry
+# raize_telemetry
 
 Named events, handlers and spans for Mettle programs, in the style of Elixir's `:telemetry`. It is pure Mettle with no dependencies. `tm_execute` is lock-free and returns almost immediately when nothing is listening.
 
-The mbuild package is `telemetry` and the public prefix is `tm_`. The API is specified in [docs/SPEC.md](docs/SPEC.md).
+The mbuild package is `raize_telemetry` and the public prefix is `tm_`. The API is specified in [docs/SPEC.md](docs/SPEC.md).
 
 **v0.1** has events, handlers, spans and the clock. Metrics (counters, histograms) come in v0.2. It runs on Linux x86-64 only, because it uses asm atomics and a raw `clock_gettime`.
 
 ```mettle
-import "telemetry/telemetry";
+import "raize_telemetry/raize_telemetry";
 
 var g_req_stop: int32 = 0;
 
